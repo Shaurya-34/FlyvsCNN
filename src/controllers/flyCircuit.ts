@@ -7,12 +7,9 @@ const CELLS = OMM_COLS * OMM_ROWS;
 const FOE_X = (OMM_COLS - 1) / 2;
 const FOE_Y = (OMM_ROWS - 1) / 2;
 const NOISE_FLOOR = 0.01;
-const GRADIENT_FLOOR_SQ = 0.005; // normal flow blows up on near-flat cells
-const EXCESS_MARGIN = 1.5;
 const CALIBRATION_MIN_ECCENTRICITY = 4.0; // near-FOE ratios are noise, so fit the slope from outer cells only
-const EVASIVE_DURATION_S = 0.3;
 
-// Published constants. The paper's ~19ms sensory delay is not modeled.
+// Published constants, never tuned. The paper's ~19ms sensory delay is not modeled.
 const LC4_C1 = 0.0002567;
 const LPLC2_C2 = 1.7;
 const LPLC2_C3 = 42; // degrees
@@ -20,15 +17,27 @@ const LPLC2_C4 = 0.52;
 const W_LPLC2 = 1.45;
 const W_LC4 = 1.62;
 
+// Engineering constants, not biology. Defaults are the hand-picked values; scripts/tune-fly.ts searches them.
+export const DEFAULT_TUNING = {
+  escapeThreshold: 1.0,
+  steeringGain: 1,
+  evasiveDurationS: 0.3,
+  hysteresis: 0.8,
+  excessMargin: 1.5,
+  componentRatio: 0.35,
+  gradientFloorSq: 0.005, // normal flow blows up on near-flat cells
+};
+
+export type FlyTuning = typeof DEFAULT_TUNING;
+
 const ECCENTRICITY = Float32Array.from({ length: CELLS }, (_, i) =>
   Math.hypot((i % OMM_COLS) - FOE_X, ((i / OMM_COLS) | 0) - FOE_Y),
 );
 
-export interface FlyControllerConfig {
+export interface FlyControllerConfig extends FlyTuning {
   hFovDeg: number;
   vFovDeg: number;
   rmoEnabled: boolean;
-  escapeThreshold: number;
 }
 
 interface FlyControllerState {
@@ -53,12 +62,7 @@ export interface FlyController {
 
 export function createFlyController(config: Partial<FlyControllerConfig> = {}): FlyController {
   return {
-    config: {
-      hFovDeg: config.hFovDeg ?? 90,
-      vFovDeg: config.vFovDeg ?? 90,
-      rmoEnabled: config.rmoEnabled ?? true,
-      escapeThreshold: config.escapeThreshold ?? 1.0,
-    },
+    config: { hFovDeg: 90, vFovDeg: 90, rmoEnabled: true, ...DEFAULT_TUNING, ...config },
     state: {
       prevOmm: null,
       prevSizeDeg: 0,
@@ -153,7 +157,7 @@ export function stepFlyController(
       const gx = (at(omm, x + 1, y) - at(omm, x - 1, y)) / 2;
       const gy = (at(omm, x, y + 1) - at(omm, x, y - 1)) / 2;
       const gradMagSq = gx * gx + gy * gy;
-      if (gradMagSq < GRADIENT_FLOOR_SQ) continue;
+      if (gradMagSq < config.gradientFloorSq) continue;
       magnitude[i] = Math.abs((omm[i] - prevOmm[i]) / dt) / Math.sqrt(gradMagSq);
     }
   }
@@ -169,14 +173,14 @@ export function stepFlyController(
     ratios.sort((a, b) => a - b);
     const slopeK = ratios.length > 0 ? ratios[Math.floor(ratios.length / 2)] : 0;
     for (let i = 0; i < CELLS; i++) {
-      rawSignal[i] = Math.max(0, magnitude[i] - slopeK * ECCENTRICITY[i] * EXCESS_MARGIN);
+      rawSignal[i] = Math.max(0, magnitude[i] - slopeK * ECCENTRICITY[i] * config.excessMargin);
     }
   } else {
     rawSignal.set(magnitude);
   }
 
   // Threshold relative to this frame's peak, since flow scale varies with dt and speed.
-  const object = largestActiveComponent(rawSignal, Math.max(NOISE_FLOOR, 0.35 * Math.max(...rawSignal)));
+  const object = largestActiveComponent(rawSignal, Math.max(NOISE_FLOOR, config.componentRatio * Math.max(...rawSignal)));
 
   const avgCellDeg = (config.hFovDeg / OMM_COLS + config.vFovDeg / OMM_ROWS) / 2;
   const sizeDeg = 2 * Math.sqrt(object.cellCount / Math.PI) * avgCellDeg; // equivalent-circle diameter
@@ -185,15 +189,15 @@ export function stepFlyController(
 
   let escaping = state.simTime < state.evasiveUntil;
   if (state.armed && gfDrive >= config.escapeThreshold) {
-    state.evasiveUntil = state.simTime + EVASIVE_DURATION_S;
+    state.evasiveUntil = state.simTime + config.evasiveDurationS;
     state.armed = false;
     escaping = true;
-  } else if (gfDrive < config.escapeThreshold * 0.8) {
+  } else if (gfDrive < config.escapeThreshold * config.hysteresis) {
     state.armed = true;
   }
 
   const direction = object.centroidX < FOE_X ? 1 : -1; // dodge away from the threat's side
-  const continuousSteering = Math.max(-1, Math.min(1, (direction * gfDrive) / config.escapeThreshold));
+  const continuousSteering = Math.max(-1, Math.min(1, (config.steeringGain * direction * gfDrive) / config.escapeThreshold));
   const steering = escaping ? direction : continuousSteering;
 
   state.prevOmm = omm;

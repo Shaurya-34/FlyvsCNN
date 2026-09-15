@@ -1,5 +1,5 @@
 // Seeded PRNG so a given seed always reproduces the same corridor.
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed;
   return function () {
     a |= 0;
