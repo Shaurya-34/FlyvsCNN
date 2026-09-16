@@ -18,23 +18,45 @@ export function horizontalFovDeg(camera: THREE.PerspectiveCamera): number {
   return (hFovRad * 180) / Math.PI;
 }
 
+type Handles = ReturnType<typeof createDroneCamera>;
+
+function renderView(renderer: THREE.WebGLRenderer, scene: THREE.Scene, handles: Handles, droneX: number, droneZ: number) {
+  const { camera, target } = handles;
+  camera.position.set(droneX, 0.6, droneZ);
+  camera.lookAt(droneX, 0.6, droneZ + 1);
+  renderer.setRenderTarget(target);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+}
+
 // The drone's own forward view as grayscale: the ONLY thing any controller sees. No scene graph, just pixels.
 export function captureFrame(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
-  handles: ReturnType<typeof createDroneCamera>,
+  handles: Handles,
   droneX: number,
   droneZ: number,
 ): Float32Array {
-  const { camera, target, pixelBuffer } = handles;
-  camera.position.set(droneX, 0.6, droneZ);
-  camera.lookAt(droneX, 0.6, droneZ + 1);
+  renderView(renderer, scene, handles, droneX, droneZ);
+  renderer.readRenderTargetPixels(handles.target, 0, 0, FRAME_WIDTH, FRAME_HEIGHT, handles.pixelBuffer);
+  return toGray(handles.pixelBuffer);
+}
 
-  renderer.setRenderTarget(target);
-  renderer.render(scene, camera);
-  renderer.readRenderTargetPixels(target, 0, 0, FRAME_WIDTH, FRAME_HEIGHT, pixelBuffer);
-  renderer.setRenderTarget(null);
+// Same frame, but the read-back waits on the GPU without blocking the main thread. The widget uses this so a page
+// can keep scrolling smoothly; the headless bench keeps the blocking version, where nothing else needs the thread.
+export async function captureFrameAsync(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  handles: Handles,
+  droneX: number,
+  droneZ: number,
+): Promise<Float32Array> {
+  renderView(renderer, scene, handles, droneX, droneZ);
+  await renderer.readRenderTargetPixelsAsync(handles.target, 0, 0, FRAME_WIDTH, FRAME_HEIGHT, handles.pixelBuffer);
+  return toGray(handles.pixelBuffer);
+}
 
+function toGray(pixelBuffer: Uint8Array): Float32Array {
   // Pixels read back bottom row first; flip so row 0 is the top of the view. Also mirror columns: looking down +z,
   // three.js puts +x on the left, but the controllers (and the harness) expect +x on the right.
   const gray = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT);

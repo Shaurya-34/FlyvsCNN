@@ -7,7 +7,7 @@ import { createDrone, stepDrone } from '../sim/drone';
 import { checkCollision } from '../sim/collisions';
 import { CORRIDOR, DRONE_CONFIG, DT } from '../sim/episode';
 import { createRenderer, createWorld } from '../render/scene';
-import { createDroneCamera, captureFrame, horizontalFovDeg } from '../render/droneCamera';
+import { createDroneCamera, captureFrameAsync, horizontalFovDeg } from '../render/droneCamera';
 import { createFlyController, stepFlyController } from '../controllers/flyCircuit';
 import { createCnnController, loadCnnWeights, stepCnnController } from '../controllers/cnn';
 
@@ -176,6 +176,12 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
       (droneMesh.material as THREE.MeshStandardMaterial).color.set(panel.color);
       panel.scene = scene;
       panel.droneMesh = droneMesh;
+      // Otherwise the shaders compile on the first frame, which stalls the page as the widget scrolls into view.
+      // The drone camera draws into an sRGB target, which needs its own shader variants, so compile both.
+      void panel.renderer.compileAsync(scene, panel.chase);
+      panel.renderer.setRenderTarget(panel.droneCam.target);
+      void panel.renderer.compileAsync(scene, panel.droneCam.camera);
+      panel.renderer.setRenderTarget(null);
     }
     restart();
   }
@@ -238,10 +244,16 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
     trace.stroke();
   }
 
-  function stepPanel(panel: Panel, steerFrom: (frame: Float32Array) => number): void {
+  // The render happens synchronously inside the call, so the drone only needs hiding around it, not until the
+  // read-back lands.
+  function capture(panel: Panel): Promise<Float32Array> {
     panel.droneMesh.visible = false;
-    const frame = captureFrame(panel.renderer, panel.scene, panel.droneCam, panel.drone.x, panel.drone.z);
+    const pending = captureFrameAsync(panel.renderer, panel.scene, panel.droneCam, panel.drone.x, panel.drone.z);
     panel.droneMesh.visible = true;
+    return pending;
+  }
+
+  function stepPanel(panel: Panel, frame: Float32Array, steerFrom: (frame: Float32Array) => number): void {
     drawEye(panel, frame);
 
     stepDrone(panel.drone, steerFrom(frame), DT, droneConfig);
@@ -265,18 +277,19 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
     panel.renderer.render(panel.scene, panel.chase);
   }
 
-  function frame(): void {
+  async function frame(): Promise<void> {
     const { fly, cnn } = panels;
+    const [flyFrame, cnnFrame] = await Promise.all([capture(fly), capture(cnn)]);
 
     let gfDrive = 0;
-    stepPanel(fly, (f) => {
+    stepPanel(fly, flyFrame, (f) => {
       const step = stepFlyController(flyController, f, DT);
       gfDrive = step.debug.gfDrive;
       return step.steering;
     });
     drawTrace(fly, gfDrive, Math.max(2.5, flyController.config.escapeThreshold * 1.5), 0, flyController.config.escapeThreshold);
 
-    stepPanel(cnn, (f) => (cnnController ? stepCnnController(cnnController, f, DT) : 0));
+    stepPanel(cnn, cnnFrame, (f) => (cnnController ? stepCnnController(cnnController, f, DT) : 0));
     drawTrace(cnn, cnnController ? cnnController.steering : 0, 1, -1, 0);
 
     render(fly);
@@ -291,12 +304,12 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
   // On a long page this widget is usually off screen, and two WebGL contexts are not free: only run while visible.
   let onScreen = false;
   let running = false;
-  function tick(): void {
+  async function tick(): Promise<void> {
     if (!onScreen || document.hidden) {
       running = false;
       return;
     }
-    frame();
+    await frame();
     requestAnimationFrame(tick);
   }
   function resume(): void {
