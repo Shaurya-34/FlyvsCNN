@@ -17,6 +17,7 @@ const rows: [string, ContestantSpec][] = [
   ['no controller', { kind: 'fly', drive: false, tuning: {} }],
   ['fly, RMO on', { kind: 'fly', drive: true, tuning: {} }],
   ['fly, RMO off', { kind: 'fly', drive: true, tuning: { rmoEnabled: false } }],
+  ['fly, no inhibition', { kind: 'fly', drive: true, tuning: { inhibitionEnabled: false } }],
   ['expert (cheat)', { kind: 'expert' }],
 ];
 

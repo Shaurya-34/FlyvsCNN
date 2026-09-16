@@ -8,7 +8,7 @@ import { checkCollision } from '../sim/collisions';
 import { CORRIDOR, DRONE_CONFIG, DT } from '../sim/episode';
 import { createRenderer, createWorld } from '../render/scene';
 import { createDroneCamera, captureFrameAsync, horizontalFovDeg } from '../render/droneCamera';
-import { createFlyController, stepFlyController } from '../controllers/flyCircuit';
+import { DEFAULT_TUNING, createFlyController, stepFlyController } from '../controllers/flyCircuit';
 import { createCnnController, loadCnnWeights, stepCnnController } from '../controllers/cnn';
 
 const TRACE_SAMPLES = 240;
@@ -101,8 +101,8 @@ const MARKUP = `
   <span class="fvc-note">corridor <span data-seed>1</span></span>
   <label><input type="checkbox" data-rmo checked> motion opponency</label>
   <label>escape threshold
-    <input type="range" data-threshold min="0.3" max="2.5" step="0.01" value="1.23">
-    <span class="fvc-val" data-threshold-val>1.23</span>
+    <input type="range" data-threshold min="0.3" max="2.5" step="0.01" value="${DEFAULT_TUNING.escapeThreshold.toFixed(2)}">
+    <span class="fvc-val" data-threshold-val>${DEFAULT_TUNING.escapeThreshold.toFixed(2)}</span>
   </label>
   <label>speed
     <input type="range" data-speed min="1" max="8" step="0.5" value="4">
@@ -293,7 +293,8 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
       gfDrive = step.debug.gfDrive;
       return step.steering;
     });
-    drawTrace(fly, gfDrive, Math.max(2.5, flyController.config.escapeThreshold * 1.5), 0, flyController.config.escapeThreshold);
+    // The inhibitory terms can push the drive below zero when an object fills the view.
+    drawTrace(fly, gfDrive, Math.max(2.5, flyController.config.escapeThreshold * 1.5), -0.5, flyController.config.escapeThreshold);
 
     stepPanel(cnn, cnnFrame, (f) => (cnnController ? stepCnnController(cnnController, f, DT) : 0));
     drawTrace(cnn, cnnController ? cnnController.steering : 0, 1, -1, 0);

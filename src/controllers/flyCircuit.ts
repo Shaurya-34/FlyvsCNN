@@ -1,5 +1,5 @@
-// Fly circuit: LPLC2 (size) + LC4 (rate) -> GF drive, Ache et al. 2019 Curr Biol, STAR Methods eq 3, 4, 7
-// (inhibitory eq 5-6 dropped). RMO compares flow magnitude to an eccentricity-scaled self-motion baseline.
+// Fly circuit: LPLC2 (size) + LC4 (rate) + two size-dependent inhibitory inputs -> GF drive, Ache et al. 2019
+// Curr Biol, STAR Methods eq 3-7. RMO compares flow magnitude to an eccentricity-scaled self-motion baseline.
 
 const OMM_COLS = 16;
 const OMM_ROWS = 12;
@@ -9,19 +9,44 @@ const FOE_Y = (OMM_ROWS - 1) / 2;
 const NOISE_FLOOR = 0.01;
 const CALIBRATION_MIN_ECCENTRICITY = 4.0; // near-FOE ratios are noise, so fit the slope from outer cells only
 
-// Published constants, never tuned. The paper's ~19ms sensory delay is not modeled.
+// Published constants, never tuned. The paper's sensory delays (11-37.5 ms) are not modeled.
 const LC4_C1 = 0.0002567;
 const LPLC2_C2 = 1.7;
 const LPLC2_C3 = 42; // degrees
 const LPLC2_C4 = 0.52;
+const I1_C5 = -0.53; // tonic inhibition, a sigmoid in size (eq 5)
+const I1_C6 = 0.59;
+const I1_C7 = 66; // degrees
+const I1_C8 = -11;
+const I2_C9 = -0.52; // LC4-dependent inhibition, a Gaussian dip in size (eq 6)
+const I2_C10 = 26; // degrees
+const I2_C11 = 7.8;
 const W_LPLC2 = 1.45;
 const W_LC4 = 1.62;
+const W_I1 = 2.27;
+const W_I2 = 1;
+
+function vLplc2(sizeDeg: number): number {
+  const theta = Math.max(sizeDeg, 1e-3);
+  const d = Math.log(theta) - Math.log(LPLC2_C3);
+  return LPLC2_C2 * Math.exp(-(d * d) / (2 * LPLC2_C4 * LPLC2_C4));
+}
+
+function inhibition(sizeDeg: number): number {
+  const tonic = I1_C5 + I1_C6 / (1 + Math.exp(-(sizeDeg - I1_C7) / I1_C8));
+  const dip = I2_C9 * Math.exp(-((sizeDeg - I2_C10) ** 2) / (2 * I2_C11 * I2_C11));
+  return W_I1 * tonic + W_I2 * dip;
+}
+
+// Escape threshold rule: half the peak of the model's own size tuning, for a disc held still (so no LC4 term).
+const HALF_MAX_DRIVE =
+  0.5 * Math.max(...Array.from({ length: 180 }, (_, i) => W_LPLC2 * vLplc2(i + 1) + inhibition(i + 1)));
 
 // Engineering constants, not biology. Defaults are the hand-picked values; scripts/tune-fly.ts searches them.
 export const DEFAULT_TUNING = {
-  // Half of the GF drive at the LPLC2 curve's 42 deg peak, i.e. fire where the published tuning curve is at
-  // half maximum (~18 deg object). A rule read off the biology, not a number fitted to our corridors.
-  escapeThreshold: 1.23,
+  // Fire where the published model's size tuning is at half maximum (about 1.2, a ~26 deg object). A rule read
+  // off the biology, not a number fitted to our corridors.
+  escapeThreshold: HALF_MAX_DRIVE,
   steeringGain: 1,
   evasiveDurationS: 0.3,
   hysteresis: 0.8,
@@ -40,6 +65,7 @@ export interface FlyControllerConfig extends FlyTuning {
   hFovDeg: number;
   vFovDeg: number;
   rmoEnabled: boolean;
+  inhibitionEnabled: boolean;
 }
 
 interface FlyControllerState {
@@ -64,7 +90,7 @@ export interface FlyController {
 
 export function createFlyController(config: Partial<FlyControllerConfig> = {}): FlyController {
   return {
-    config: { hFovDeg: 90, vFovDeg: 90, rmoEnabled: true, ...DEFAULT_TUNING, ...config },
+    config: { hFovDeg: 90, vFovDeg: 90, rmoEnabled: true, inhibitionEnabled: true, ...DEFAULT_TUNING, ...config },
     state: {
       prevOmm: null,
       prevSizeDeg: 0,
@@ -73,12 +99,6 @@ export function createFlyController(config: Partial<FlyControllerConfig> = {}): 
       simTime: 0,
     },
   };
-}
-
-function vLplc2(sizeDeg: number): number {
-  const theta = Math.max(sizeDeg, 1e-3);
-  const d = Math.log(theta) - Math.log(LPLC2_C3);
-  return LPLC2_C2 * Math.exp(-(d * d) / (2 * LPLC2_C4));
 }
 
 // Input is always 64x48, so each ommatidium is an exact 4x4 block.
@@ -204,7 +224,10 @@ export function stepFlyController(
   const heightDeg = (object.height * config.vFovDeg) / OMM_ROWS;
   const sizeDeg = 2 * Math.sqrt((widthDeg * heightDeg) / Math.PI);
   const rateDegPerSec = (sizeDeg - state.prevSizeDeg) / dt;
-  const gfDrive = W_LPLC2 * vLplc2(sizeDeg) + W_LC4 * (LC4_C1 * rateDegPerSec);
+  const gfDrive =
+    W_LPLC2 * vLplc2(sizeDeg) +
+    W_LC4 * (LC4_C1 * rateDegPerSec) +
+    (config.inhibitionEnabled ? inhibition(sizeDeg) : 0);
 
   let escaping = state.simTime < state.evasiveUntil;
   if (state.armed && gfDrive >= config.escapeThreshold) {
