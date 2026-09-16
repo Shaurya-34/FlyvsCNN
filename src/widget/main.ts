@@ -54,10 +54,13 @@ const STYLE = `
   border: 1px solid var(--fvc-line); border-radius: 2px; cursor: pointer; }
 .fvc button:hover { border-color: var(--fvc-muted); }
 .fvc-val { color: var(--fvc-muted); font-variant-numeric: tabular-nums; min-width: 3.2em; }
-.fvc-swap { display: none; }
+.fvc-swap, .fvc-tap { display: none; }
+.fvc-tap { position: absolute; right: 8px; top: 8px; padding: 1px 6px; font-size: 11px; color: var(--fvc-muted);
+  background: color-mix(in srgb, var(--fvc-panel) 85%, transparent); pointer-events: none; }
 @media (max-width: 720px) {
   .fvc-panels { grid-template-columns: 1fr; }
-  .fvc-swap { display: inline-flex; }
+  .fvc-swap, .fvc-tap { display: inline-flex; }
+  .fvc-stage { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 `;
 
@@ -72,6 +75,7 @@ const MARKUP = `
       <canvas class="fvc-view" data-view></canvas>
       <span class="fvc-eye-label">what it sees</span>
       <canvas class="fvc-eye" data-eye width="64" height="48"></canvas>
+      <span class="fvc-tap">tap for the CNN</span>
     </div>
     <canvas class="fvc-trace" data-trace></canvas>
     <div class="fvc-trace-label">Giant Fiber drive, with escape threshold</div>
@@ -85,6 +89,7 @@ const MARKUP = `
       <canvas class="fvc-view" data-view></canvas>
       <span class="fvc-eye-label">what it sees</span>
       <canvas class="fvc-eye" data-eye width="64" height="48"></canvas>
+      <span class="fvc-tap">tap for the fly circuit</span>
     </div>
     <canvas class="fvc-trace" data-trace></canvas>
     <div class="fvc-trace-label">steering output</div>
@@ -266,6 +271,7 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
 
   function render(panel: Panel): void {
     const { clientWidth, clientHeight } = panel.view;
+    if (clientWidth === 0) return; // the panel swapped out on a phone: keep simulating, skip drawing
     if (panel.view.width !== clientWidth || panel.view.height !== clientHeight) {
       panel.renderer.setSize(clientWidth, clientHeight, false);
       panel.chase.aspect = clientWidth / clientHeight;
@@ -338,16 +344,24 @@ export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
     droneConfig.speed = Number(controls.speed.value);
   };
   const swap = q('[data-swap]');
-  swap.onclick = () => {
+  const narrow = window.matchMedia('(max-width: 720px)');
+  function swapPanels(): void {
     const flyPanel = q('.fvc-panel[data-who="fly"]');
     const cnnPanel = q('.fvc-panel[data-who="cnn"]');
     const showingFly = !flyPanel.classList.contains('is-hidden');
     flyPanel.classList.toggle('is-hidden', showingFly);
     cnnPanel.classList.toggle('is-hidden', !showingFly);
     swap.textContent = showingFly ? 'Show fly circuit' : 'Show CNN';
-  };
-  // The CSS drops to one column on narrow screens, so start on the fly panel and let the button swap them.
-  if (window.matchMedia('(max-width: 720px)').matches) q('.fvc-panel[data-who="cnn"]').classList.add('is-hidden');
+  }
+  swap.onclick = swapPanels;
+  // On a phone only one drone is on screen, and the simulation itself is the biggest thing to tap.
+  for (const stage of root.querySelectorAll<HTMLElement>('.fvc-stage')) {
+    stage.addEventListener('click', () => {
+      if (narrow.matches) swapPanels();
+    });
+  }
+  // The CSS drops to one column on narrow screens, so start on the fly panel.
+  if (narrow.matches) q('.fvc-panel[data-who="cnn"]').classList.add('is-hidden');
 
   fetch(weightsUrl)
     .then((r) => r.arrayBuffer())
