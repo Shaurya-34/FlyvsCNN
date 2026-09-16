@@ -21,15 +21,7 @@ Caveats: the connectome gives the wiring, not the transfer functions (those come
 
 The CNN (`train/model.py`) takes the last 4 frames stacked (20Hz), has 3 stride-2 convolutions and 2 fully connected layers (~35k parameters), and regresses steering. It is trained by imitation on labels from a scripted expert that is allowed to see obstacle positions; the trained CNN itself sees only frames.
 
-## Status
-
-- [x] Phase 1: seeded corridor, drone kinematics, Three.js renderer
-- [x] Phase 2: circuit verified on a synthetic looming disc (`prototypes/fly_circuit.py`)
-- [x] Phase 3: circuit on rendered frames, with RMO
-- [x] Phase 4: headless episode generation + CNN training
-- [x] Phase 5: parameter sweeps (`scripts/tune-fly.ts`)
-- [x] Phase 6: widget UI
-- [x] Phase 7: evaluation on held-out seeds
+## Results
 
 Benchmark, 20 corridors (seeds 5101-5120), rendered by Three.js:
 
