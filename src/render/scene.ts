@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import type { Obstacle } from '../sim/corridor';
 
-export function createScene(canvas: HTMLCanvasElement) {
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf2f2f0);
-
-  const camera = new THREE.PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.1, 300);
-
+export function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  return renderer;
+}
+
+// Everything the drone can see. Shared by the widget and the headless bench page, so both render identically.
+export function createWorld(obstacles: Obstacle[], corridorLength: number, corridorWidth: number) {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf2f2f0);
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.7);
   const directional = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -22,15 +24,6 @@ export function createScene(canvas: HTMLCanvasElement) {
   droneMesh.rotation.x = Math.PI / 2;
   scene.add(droneMesh);
 
-  return { scene, camera, renderer, droneMesh };
-}
-
-export function buildCorridorMeshes(
-  scene: THREE.Scene,
-  obstacles: Obstacle[],
-  corridorLength: number,
-  corridorWidth: number,
-): void {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(corridorWidth * 3, corridorLength),
     new THREE.MeshStandardMaterial({ color: 0xdedede }),
@@ -69,4 +62,6 @@ export function buildCorridorMeshes(
   const rightWall = leftWall.clone();
   rightWall.position.x = corridorWidth / 2;
   scene.add(rightWall);
+
+  return { scene, droneMesh };
 }

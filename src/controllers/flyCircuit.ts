@@ -19,7 +19,9 @@ const W_LC4 = 1.62;
 
 // Engineering constants, not biology. Defaults are the hand-picked values; scripts/tune-fly.ts searches them.
 export const DEFAULT_TUNING = {
-  escapeThreshold: 1.0,
+  // Half of the GF drive at the LPLC2 curve's 42 deg peak, i.e. fire where the published tuning curve is at
+  // half maximum (~18 deg object). A rule read off the biology, not a number fitted to our corridors.
+  escapeThreshold: 1.23,
   steeringGain: 1,
   evasiveDurationS: 0.3,
   hysteresis: 0.8,
@@ -96,10 +98,13 @@ function at(grid: Float32Array, x: number, y: number): number {
 }
 
 // The model's theta is ONE object's angular size, so read it from the largest contiguous region, not a sum over the eye.
-function largestActiveComponent(rawSignal: Float32Array, threshold: number): { cellCount: number; centroidX: number } {
+function largestActiveComponent(
+  rawSignal: Float32Array,
+  threshold: number,
+): { cellCount: number; centroidX: number; width: number; height: number } {
   const visited = new Uint8Array(CELLS);
   const stack: number[] = [];
-  let best = { cellCount: 0, centroidX: FOE_X };
+  let best = { cellCount: 0, centroidX: FOE_X, width: 0, height: 0 };
 
   for (let start = 0; start < CELLS; start++) {
     if (visited[start] || rawSignal[start] <= threshold) continue;
@@ -108,6 +113,10 @@ function largestActiveComponent(rawSignal: Float32Array, threshold: number): { c
     visited[start] = 1;
     let cellCount = 0;
     let sumX = 0;
+    let minX = OMM_COLS;
+    let maxX = -1;
+    let minY = OMM_ROWS;
+    let maxY = -1;
 
     while (stack.length > 0) {
       const i = stack.pop() as number;
@@ -115,6 +124,10 @@ function largestActiveComponent(rawSignal: Float32Array, threshold: number): { c
       const y = (i / OMM_COLS) | 0;
       cellCount++;
       sumX += x;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
 
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
@@ -129,7 +142,9 @@ function largestActiveComponent(rawSignal: Float32Array, threshold: number): { c
       }
     }
 
-    if (cellCount > best.cellCount) best = { cellCount, centroidX: sumX / cellCount };
+    if (cellCount > best.cellCount) {
+      best = { cellCount, centroidX: sumX / cellCount, width: maxX - minX + 1, height: maxY - minY + 1 };
+    }
   }
   return best;
 }
@@ -182,8 +197,12 @@ export function stepFlyController(
   // Threshold relative to this frame's peak, since flow scale varies with dt and speed.
   const object = largestActiveComponent(rawSignal, Math.max(NOISE_FLOOR, config.componentRatio * Math.max(...rawSignal)));
 
-  const avgCellDeg = (config.hFovDeg / OMM_COLS + config.vFovDeg / OMM_ROWS) / 2;
-  const sizeDeg = 2 * Math.sqrt(object.cellCount / Math.PI) * avgCellDeg; // equivalent-circle diameter
+  // Flat-shaded surfaces only produce flow at their edges, so the component is a ribbon and its cell count badly
+  // under-reads a real obstacle. Obstacles are solid, so take the bounding box as filled and report the diameter of
+  // the circle with that area: a near pole grows properly, while a floor-grid streak stays thin and small.
+  const widthDeg = (object.width * config.hFovDeg) / OMM_COLS;
+  const heightDeg = (object.height * config.vFovDeg) / OMM_ROWS;
+  const sizeDeg = 2 * Math.sqrt((widthDeg * heightDeg) / Math.PI);
   const rateDegPerSec = (sizeDeg - state.prevSizeDeg) / dt;
   const gfDrive = W_LPLC2 * vLplc2(sizeDeg) + W_LC4 * (LC4_C1 * rateDegPerSec);
 

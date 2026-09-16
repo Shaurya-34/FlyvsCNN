@@ -1,7 +1,7 @@
-import type { Obstacle } from '../src/sim/corridor';
-import { stepDrone, type DroneState } from '../src/sim/drone';
-import { DRONE_RADIUS, obstacleRadius } from '../src/sim/collisions';
-import { CORRIDOR, DRONE_CONFIG } from './corridor-harness';
+import type { Obstacle } from './corridor';
+import { stepDrone, type DroneState } from './drone';
+import { DRONE_RADIUS, obstacleRadius } from './collisions';
+import { CORRIDOR, DRONE_CONFIG } from './episode';
 
 const LOOKAHEAD_S = 2;
 const ROLLOUT_DT = 0.05;

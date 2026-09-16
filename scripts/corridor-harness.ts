@@ -1,19 +1,13 @@
 /**
- * Headless stand-in for the Three.js render, so controllers can be tested
- * against the REAL corridor geometry and REAL drone kinematics without a
- * WebGL context. Projects obstacle silhouettes and ground grid lines with a
- * plain pinhole camera, which is close to what the flat-shaded scene looks
- * like from the drone's viewpoint. Its pixels are not identical to Three.js.
+ * Headless stand-in for the Three.js render, fast enough for tight loops in Node without a WebGL context. Projects
+ * obstacle silhouettes and ground grid lines with a plain pinhole camera. Its pixels are NOT identical to Three.js, so
+ * final numbers use --three (the real renderer in headless Edge, see scripts/runner.ts).
  */
-import { generateCorridor, type Obstacle } from '../src/sim/corridor';
-import { createDrone, stepDrone, type DroneState } from '../src/sim/drone';
-import { checkCollision } from '../src/sim/collisions';
+import type { Obstacle } from '../src/sim/corridor';
+import type { Renderer } from '../src/sim/episode';
 
 export const W = 64;
 export const H = 48;
-export const CORRIDOR = { length: 120, width: 8, density: 0.3, sizeVariance: 0.4 };
-export const DRONE_CONFIG = { speed: 4, lateralDamping: 2 };
-export const DT = 1 / 60;
 
 const CAM_Y = 0.6;
 const V_FOV_DEG = 90;
@@ -71,23 +65,4 @@ export function renderFrame(droneX: number, droneZ: number, obstacles: Obstacle[
   return out;
 }
 
-export type Steer = (frame: Float32Array, drone: DroneState, obstacles: Obstacle[]) => number;
-
-// One full corridor run. Controllers that must not cheat should only read `frame`.
-export function flyEpisode(seed: number, steer: Steer): { collisions: number } {
-  const obstacles = generateCorridor({ seed, ...CORRIDOR });
-  const drone = createDrone();
-  let collisions = 0;
-  let lastHit: number | null = null;
-
-  while (drone.z < CORRIDOR.length) {
-    const steering = steer(renderFrame(drone.x, drone.z, obstacles), drone, obstacles);
-    stepDrone(drone, steering, DT, DRONE_CONFIG);
-    drone.x = Math.max(-CORRIDOR.width / 2, Math.min(CORRIDOR.width / 2, drone.x));
-
-    const hit = checkCollision(drone.x, drone.z, obstacles);
-    if (hit !== null && hit !== lastHit) collisions++;
-    lastHit = hit;
-  }
-  return { collisions };
-}
+export const harnessRenderer: Renderer = (obstacles) => (droneX, droneZ) => renderFrame(droneX, droneZ, obstacles);

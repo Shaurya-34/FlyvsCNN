@@ -7,6 +7,7 @@ const DRONE_CAM_FOV_DEG = 90; // vertical FOV, an engineering/sensor choice, not
 export function createDroneCamera() {
   const camera = new THREE.PerspectiveCamera(DRONE_CAM_FOV_DEG, FRAME_WIDTH / FRAME_HEIGHT, 0.05, 200);
   const target = new THREE.WebGLRenderTarget(FRAME_WIDTH, FRAME_HEIGHT);
+  target.texture.colorSpace = THREE.SRGBColorSpace; // otherwise the capture is linear and darker than what's on screen
   const pixelBuffer = new Uint8Array(FRAME_WIDTH * FRAME_HEIGHT * 4);
   return { camera, target, pixelBuffer };
 }
@@ -34,12 +35,14 @@ export function captureFrame(
   renderer.readRenderTargetPixels(target, 0, 0, FRAME_WIDTH, FRAME_HEIGHT, pixelBuffer);
   renderer.setRenderTarget(null);
 
+  // Pixels read back bottom row first; flip so row 0 is the top of the view. Also mirror columns: looking down +z,
+  // three.js puts +x on the left, but the controllers (and the harness) expect +x on the right.
   const gray = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT);
-  for (let i = 0; i < FRAME_WIDTH * FRAME_HEIGHT; i++) {
-    const r = pixelBuffer[i * 4];
-    const g = pixelBuffer[i * 4 + 1];
-    const b = pixelBuffer[i * 4 + 2];
-    gray[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  for (let y = 0; y < FRAME_HEIGHT; y++) {
+    for (let x = 0; x < FRAME_WIDTH; x++) {
+      const src = ((FRAME_HEIGHT - 1 - y) * FRAME_WIDTH + (FRAME_WIDTH - 1 - x)) * 4;
+      gray[y * FRAME_WIDTH + x] = (0.299 * pixelBuffer[src] + 0.587 * pixelBuffer[src + 1] + 0.114 * pixelBuffer[src + 2]) / 255;
+    }
   }
   return gray;
 }

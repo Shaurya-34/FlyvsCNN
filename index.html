@@ -2,14 +2,131 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Fly vs CNN — Phase 1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fly circuit vs CNN</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #f2f2f0; }
-      #viewport { width: 100%; height: 100%; display: block; }
+      :root {
+        --ink: #14161a;
+        --muted: #6b7280;
+        --line: #d9d9d4;
+        --paper: #f2f2f0;
+        --fly: #2f5fd0;
+        --cnn: #6d4ed8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px 20px 32px;
+        background: var(--paper);
+        color: var(--ink);
+        font: 14px/1.5 "Helvetica Neue", Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 1040px; margin: 0 auto; }
+      h1 { margin: 0 0 4px; font-size: 30px; font-weight: 300; letter-spacing: -0.01em; }
+      .sub { margin: 0 0 20px; color: var(--muted); max-width: 62ch; }
+
+      .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .panel { min-width: 0; }
+      .head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+      .name { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .fly .name { color: var(--fly); }
+      .cnn .name { color: var(--cnn); }
+      .note { color: var(--muted); font-size: 12px; }
+      .hits { font-variant-numeric: tabular-nums; }
+
+      .stage { position: relative; aspect-ratio: 16 / 10; border: 1px solid var(--line); background: #fff; }
+      .stage canvas.view { width: 100%; height: 100%; display: block; }
+      .eye {
+        position: absolute; left: 8px; bottom: 8px; width: 128px; height: 96px;
+        image-rendering: pixelated; border: 1px solid var(--line); background: #fff;
+      }
+      .eye-label {
+        position: absolute; left: 8px; bottom: 108px; padding: 1px 5px;
+        font-size: 11px; color: var(--muted); background: rgba(255, 255, 255, 0.85);
+      }
+      .trace { width: 100%; height: 72px; display: block; border: 1px solid var(--line); border-top: 0; background: #fff; }
+      .trace-label { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+      .controls {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+        margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+      }
+      .controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      .controls input[type="range"] { width: 130px; accent-color: var(--fly); }
+      .controls input[type="checkbox"] { accent-color: var(--fly); }
+      button {
+        font: inherit; font-size: 13px; padding: 5px 12px; color: var(--ink);
+        background: #fff; border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+      }
+      button:hover { border-color: var(--muted); }
+      .val { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3.2em; }
+      .only-mobile { display: none; }
+
+      @media (max-width: 720px) {
+        .panels { grid-template-columns: 1fr; }
+        .panel.hidden { display: none; }
+        .only-mobile { display: inline-flex; }
+      }
     </style>
   </head>
   <body>
-    <canvas id="viewport"></canvas>
+    <div class="wrap">
+      <h1>Fly circuit vs CNN</h1>
+      <p class="sub">
+        Two drones fly the same corridor. One is steered by a hardwired model of the fruit fly's looming-escape
+        pathway with no training at all; the other by a small convolutional network trained on expert flights. Both see
+        only the 64&times;48 grayscale view in the corner.
+      </p>
+
+      <div class="panels">
+        <section class="panel fly" id="panel-fly">
+          <div class="head">
+            <span class="name">Fly circuit</span>
+            <span class="note">zero training &middot; <span class="hits" id="hits-fly">0</span> hits</span>
+          </div>
+          <div class="stage">
+            <canvas class="view" id="view-fly"></canvas>
+            <span class="eye-label">what it sees</span>
+            <canvas class="eye" id="eye-fly" width="64" height="48"></canvas>
+          </div>
+          <canvas class="trace" id="trace-fly"></canvas>
+          <div class="trace-label">Giant Fiber drive, with escape threshold</div>
+        </section>
+
+        <section class="panel cnn" id="panel-cnn">
+          <div class="head">
+            <span class="name">CNN</span>
+            <span class="note">200 training episodes &middot; <span class="hits" id="hits-cnn">0</span> hits</span>
+          </div>
+          <div class="stage">
+            <canvas class="view" id="view-cnn"></canvas>
+            <span class="eye-label">what it sees</span>
+            <canvas class="eye" id="eye-cnn" width="64" height="48"></canvas>
+          </div>
+          <canvas class="trace" id="trace-cnn"></canvas>
+          <div class="trace-label">steering output</div>
+        </section>
+      </div>
+
+      <div class="controls">
+        <button id="restart">Restart</button>
+        <button id="next-seed">New corridor</button>
+        <span class="note">corridor <span id="seed">1</span></span>
+        <label><input type="checkbox" id="rmo" checked /> motion opponency</label>
+        <label>
+          escape threshold
+          <input type="range" id="threshold" min="0.3" max="2.5" step="0.01" value="1.23" />
+          <span class="val" id="threshold-val">1.23</span>
+        </label>
+        <label>
+          speed
+          <input type="range" id="speed" min="1" max="8" step="0.5" value="4" />
+          <span class="val" id="speed-val">4.0</span>
+        </label>
+        <button class="only-mobile" id="swap">Show CNN</button>
+      </div>
+    </div>
     <script type="module" src="/src/widget/main.ts"></script>
   </body>
 </html>

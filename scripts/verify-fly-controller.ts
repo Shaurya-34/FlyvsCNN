@@ -1,84 +1,62 @@
-// Usage: npx tsx scripts/verify-fly-controller.ts [cnn weights .bin ...]   (defaults to public/cnn.bin if it exists)
-// Adds a tuned fly circuit row if data/tuning.json exists. Prints the table and writes data/benchmark.json.
+// Usage: npx tsx scripts/verify-fly-controller.ts [cnn weights .bin ...] [--three] [--eval]  (defaults to public/cnn.bin)
+// Adds a tuned fly circuit row if data/tuning.json exists. Prints the table and writes data/benchmark.json,
+// or with --eval runs the held-out seeds once and writes data/evaluation.json (Phase 7).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createFlyController, stepFlyController, type FlyControllerConfig } from '../src/controllers/flyCircuit';
-import { createCnnController, loadCnnWeights, stepCnnController } from '../src/controllers/cnn';
-import { BENCH_SEEDS } from '../src/sim/seeds';
-import { DT, flyEpisode, type Steer } from './corridor-harness';
-import { expertSteer } from './expert';
+import type { ContestantSpec } from '../src/bench/tasks';
+import { BENCH_SEEDS, EVAL_SEEDS } from '../src/sim/seeds';
+import { args, openRunner, useThree } from './runner';
 
 // Benchmark seeds: never trained or tuned on, and not used for checkpoint selection either.
-const SEEDS = Array.from({ length: 20 }, (_, i) => BENCH_SEEDS.from + i);
+// Eval seeds: touched only here, and only once the circuit and the CNNs are final.
+const evaluating = args.includes('--eval');
+const SEEDS = evaluating
+  ? Array.from({ length: 100 }, (_, i) => EVAL_SEEDS.from + i)
+  : Array.from({ length: 20 }, (_, i) => BENCH_SEEDS.from + i);
 
-let escapes = 0;
-let effort = 0;
-let steps = 0;
-
-function circuit(rmoEnabled: boolean, drive: boolean, tuning: Partial<FlyControllerConfig> = {}): () => Steer {
-  return () => {
-    const controller = createFlyController({ rmoEnabled, ...tuning });
-    return (frame) => {
-      const { steering, debug } = stepFlyController(controller, frame, DT);
-      if (debug.escaping) escapes++;
-      effort += Math.abs(steering);
-      steps++;
-      return drive ? steering : 0;
-    };
-  };
-}
-
-const expert: () => Steer = () => (_frame, drone, obstacles) => {
-  const steering = expertSteer(drone, obstacles);
-  effort += Math.abs(steering);
-  steps++;
-  return steering;
-};
-
-const rows: [string, () => Steer, boolean][] = [
-  ['no controller', circuit(true, false), true],
-  ['fly, RMO on', circuit(true, true), true],
-  ['fly, RMO off', circuit(false, true), true],
-  ['expert (cheat)', expert, false],
+const rows: [string, ContestantSpec][] = [
+  ['no controller', { kind: 'fly', drive: false, tuning: {} }],
+  ['fly, RMO on', { kind: 'fly', drive: true, tuning: {} }],
+  ['fly, RMO off', { kind: 'fly', drive: true, tuning: { rmoEnabled: false } }],
+  ['expert (cheat)', { kind: 'expert' }],
 ];
 
 if (existsSync('data/tuning.json')) {
   const best = JSON.parse(readFileSync('data/tuning.json', 'utf8')).trials[0].tuning;
-  rows.push(['fly, tuned', circuit(true, true, best), true]);
+  rows.push(['fly, tuned', { kind: 'fly', drive: true, tuning: best }]);
 }
 
-const cnnPaths = process.argv.slice(2);
+const cnnPaths = args.filter((a) => !a.startsWith('--'));
 if (cnnPaths.length === 0 && existsSync('public/cnn.bin')) cnnPaths.push('public/cnn.bin');
-for (const path of cnnPaths) {
-  const weights = loadCnnWeights(readFileSync(path));
-  rows.push([
-    path,
-    () => {
-      const controller = createCnnController(weights);
-      return (frame) => {
-        const steering = stepCnnController(controller, frame, DT);
-        effort += Math.abs(steering);
-        steps++;
-        return steering;
-      };
-    },
-    false,
-  ]);
-}
+for (const path of cnnPaths) rows.push([path, { kind: 'cnn', path }]);
 
-console.log(`Flying ${SEEDS.length} benchmark corridors (seeds ${SEEDS[0]}-${SEEDS[SEEDS.length - 1]}).\n`);
+console.log(
+  `Flying ${SEEDS.length} ${evaluating ? 'held-out' : 'benchmark'} corridors (seeds ${SEEDS[0]}-${SEEDS[SEEDS.length - 1]}) ` +
+    `on the ${useThree ? 'Three.js' : 'harness'} renderer.\n`,
+);
 console.log(`${'condition'.padEnd(28)}collisions   escape-frames   avg|steering|`);
 
+const runner = await openRunner();
 const results = [];
-for (const [label, makeSteer, hasEscapes] of rows) {
-  escapes = effort = steps = 0;
+for (const [label, spec] of rows) {
   let collisions = 0;
-  for (const seed of SEEDS) collisions += flyEpisode(seed, makeSteer()).collisions;
+  let escapes = 0;
+  let effort = 0;
+  let steps = 0;
+  for (const seed of SEEDS) {
+    const r = await runner.benchmark(seed, spec);
+    collisions += r.collisions;
+    escapes += r.escapes;
+    effort += r.effort;
+    steps += r.steps;
+  }
+  const hasEscapes = spec.kind === 'fly';
   const avgSteering = effort / steps;
   results.push({ label, collisions, escapes: hasEscapes ? escapes : null, avgSteering });
   console.log(
     `${label.padEnd(28)}${String(collisions).padStart(10)}   ${(hasEscapes ? String(escapes) : '-').padStart(13)}   ${avgSteering.toFixed(3).padStart(13)}`,
   );
 }
+await runner.close();
 
 mkdirSync('data', { recursive: true });
-writeFileSync('data/benchmark.json', JSON.stringify(results, null, 2));
+writeFileSync(evaluating ? 'data/evaluation.json' : 'data/benchmark.json', JSON.stringify(results, null, 2));

@@ -1,6 +1,6 @@
 # Data-efficiency curve: train the CNN on growing numbers of expert episodes with the same gradient-step budget,
 # benchmark each in closed loop on the same corridors as the fly circuit, and plot.
-# Usage, from the repo root: python train/curve.py   (re-running skips models that already exist)
+# Usage, from the repo root: python train/curve.py [--three]   (re-running skips models that already exist)
 import json
 import math
 import os
@@ -30,12 +30,13 @@ for n in EPISODES:
         subprocess.run([sys.executable, "train/train.py", str(epochs), str(n), path], check=True)
     paths.append(path)
 
-subprocess.run("npx tsx scripts/verify-fly-controller.ts " + " ".join(paths), shell=True, check=True)
+three = " --three" if "--three" in sys.argv else ""  # benchmark on the real Three.js renderer
+subprocess.run("npx tsx scripts/verify-fly-controller.ts " + " ".join(paths) + three, shell=True, check=True)
 rows = {r["label"]: r for r in json.load(open("data/benchmark.json"))}
 
 cnn = [rows[p]["collisions"] for p in paths]
 fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(EPISODES, cnn, "o-", color="#d62728", label="CNN")
+ax.plot(EPISODES, cnn, "o-", color="#6d4ed8", label="CNN")  # same violet the widget uses for the CNN drone
 lines = [
     ("fly circuit, untuned (0 episodes)", "fly, RMO on", "#1f77b4", "--"),
     ("fly circuit, tuned on 20 training corridors", "fly, tuned", "#1f77b4", ":"),
