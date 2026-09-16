@@ -114,3 +114,26 @@ npx tsx scripts/verify-fly-controller.ts train/curve/cnn_2.bin train/curve/cnn_5
 ```
 
 A `--three` run drives a headless browser, so close the `npm run dev` preview first: a widget tab rendering in the background roughly doubles how long these take.
+
+## Embedding in the blog
+
+`npm run build:embed` writes `dist/flyvscnn.js` (600 kB, 136 kB gzipped, Three.js included). The bundle mounts itself
+into every `[data-fly-vs-cnn]` element on the page and brings its own styles, which inherit the host's fonts and follow
+its light/dark theme. It runs only while it is on screen and the tab is visible, so a post that scrolls past it costs
+nothing. Refresh the copies in the blog repo with:
+
+```bash
+npm run build:embed
+cp dist/flyvscnn.js  ../log/vendor/flyvscnn.js
+cp public/cnn.bin    ../log/assets/flyvscnn-cnn.bin
+```
+
+The post body then carries one line, and `POST_BUNDLES` in the blog's `build.py` maps that post's slug to
+`vendor/flyvscnn.js` so only that page loads it:
+
+```html
+<figure data-fly-vs-cnn data-weights="assets/flyvscnn-cnn.bin"></figure>
+```
+
+`dev/flyvscnn-embed.html` in the blog repo is a scratch page that loads the bundle under the site's real
+Content-Security-Policy, for checking the embed without publishing a post.

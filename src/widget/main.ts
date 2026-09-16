@@ -1,3 +1,6 @@
+// The widget, as a self-contained block: it builds its own markup and styles inside whatever element it is given,
+// so a host page only needs `<figure data-fly-vs-cnn></figure>` and this bundle. `data-weights` overrides where the
+// CNN weights are fetched from, which matters when the host serves them from somewhere other than the page's folder.
 import * as THREE from 'three';
 import { generateCorridor } from '../sim/corridor';
 import { createDrone, stepDrone } from '../sim/drone';
@@ -9,15 +12,100 @@ import { createFlyController, stepFlyController } from '../controllers/flyCircui
 import { createCnnController, loadCnnWeights, stepCnnController } from '../controllers/cnn';
 
 const TRACE_SAMPLES = 240;
-const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const FLY_COLOR = 0x2f5fd0;
+const CNN_COLOR = 0x6d4ed8;
 
-const controls = {
-  rmo: el<HTMLInputElement>('rmo'),
-  threshold: el<HTMLInputElement>('threshold'),
-  speed: el<HTMLInputElement>('speed'),
-  seed: el<HTMLSpanElement>('seed'),
-};
-const droneConfig = { ...DRONE_CONFIG };
+const STYLE = `
+.fvc { --fvc-ink: #14161a; --fvc-muted: #6b7280; --fvc-line: #d9d9d4; --fvc-panel: #fff;
+  --fvc-fly: #2f5fd0; --fvc-cnn: #6d4ed8; margin: 0; color: var(--fvc-ink); }
+@media (prefers-color-scheme: dark) {
+  .fvc { --fvc-ink: #e8e8e4; --fvc-muted: #9aa0aa; --fvc-line: #34363b; --fvc-panel: #1b1d21;
+    --fvc-fly: #7aa2f7; --fvc-cnn: #a48cf0; }
+}
+[data-theme="dark"] .fvc { --fvc-ink: #e8e8e4; --fvc-muted: #9aa0aa; --fvc-line: #34363b; --fvc-panel: #1b1d21;
+  --fvc-fly: #7aa2f7; --fvc-cnn: #a48cf0; }
+[data-theme="light"] .fvc { --fvc-ink: #14161a; --fvc-muted: #6b7280; --fvc-line: #d9d9d4; --fvc-panel: #fff;
+  --fvc-fly: #2f5fd0; --fvc-cnn: #6d4ed8; }
+.fvc * { box-sizing: border-box; }
+.fvc-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fvc-panel { min-width: 0; }
+.fvc-panel.is-hidden { display: none; }
+.fvc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.fvc-name { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+.fvc-panel[data-who="fly"] .fvc-name { color: var(--fvc-fly); }
+.fvc-panel[data-who="cnn"] .fvc-name { color: var(--fvc-cnn); }
+.fvc-note { color: var(--fvc-muted); font-size: 12px; }
+.fvc-hits { font-variant-numeric: tabular-nums; }
+.fvc-stage { position: relative; aspect-ratio: 16 / 10; border: 1px solid var(--fvc-line); background: var(--fvc-panel); }
+.fvc-view { width: 100%; height: 100%; display: block; }
+.fvc-eye { position: absolute; left: 8px; bottom: 8px; width: 128px; height: 96px; max-width: 45%;
+  image-rendering: pixelated; border: 1px solid var(--fvc-line); background: var(--fvc-panel); }
+.fvc-eye-label { position: absolute; left: 8px; bottom: 108px; padding: 1px 5px; font-size: 11px;
+  color: var(--fvc-muted); background: color-mix(in srgb, var(--fvc-panel) 85%, transparent); }
+.fvc-trace { width: 100%; height: 72px; display: block; border: 1px solid var(--fvc-line); border-top: 0;
+  background: var(--fvc-panel); }
+.fvc-trace-label { margin-top: 6px; font-size: 12px; color: var(--fvc-muted); }
+.fvc-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 18px;
+  padding-top: 14px; border-top: 1px solid var(--fvc-line); }
+.fvc-controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.fvc-controls input[type="range"] { width: 120px; accent-color: var(--fvc-fly); }
+.fvc-controls input[type="checkbox"] { accent-color: var(--fvc-fly); }
+.fvc button { font: inherit; font-size: 13px; padding: 5px 12px; color: var(--fvc-ink); background: var(--fvc-panel);
+  border: 1px solid var(--fvc-line); border-radius: 2px; cursor: pointer; }
+.fvc button:hover { border-color: var(--fvc-muted); }
+.fvc-val { color: var(--fvc-muted); font-variant-numeric: tabular-nums; min-width: 3.2em; }
+.fvc-swap { display: none; }
+@media (max-width: 720px) {
+  .fvc-panels { grid-template-columns: 1fr; }
+  .fvc-swap { display: inline-flex; }
+}
+`;
+
+const MARKUP = `
+<div class="fvc-panels">
+  <section class="fvc-panel" data-who="fly">
+    <div class="fvc-head">
+      <span class="fvc-name">Fly circuit</span>
+      <span class="fvc-note">zero training &middot; <span class="fvc-hits" data-hits>0</span> hits</span>
+    </div>
+    <div class="fvc-stage">
+      <canvas class="fvc-view" data-view></canvas>
+      <span class="fvc-eye-label">what it sees</span>
+      <canvas class="fvc-eye" data-eye width="64" height="48"></canvas>
+    </div>
+    <canvas class="fvc-trace" data-trace></canvas>
+    <div class="fvc-trace-label">Giant Fiber drive, with escape threshold</div>
+  </section>
+  <section class="fvc-panel" data-who="cnn">
+    <div class="fvc-head">
+      <span class="fvc-name">CNN</span>
+      <span class="fvc-note">200 training episodes &middot; <span class="fvc-hits" data-hits>0</span> hits</span>
+    </div>
+    <div class="fvc-stage">
+      <canvas class="fvc-view" data-view></canvas>
+      <span class="fvc-eye-label">what it sees</span>
+      <canvas class="fvc-eye" data-eye width="64" height="48"></canvas>
+    </div>
+    <canvas class="fvc-trace" data-trace></canvas>
+    <div class="fvc-trace-label">steering output</div>
+  </section>
+</div>
+<div class="fvc-controls">
+  <button type="button" data-restart>Restart</button>
+  <button type="button" data-next-seed>New corridor</button>
+  <span class="fvc-note">corridor <span data-seed>1</span></span>
+  <label><input type="checkbox" data-rmo checked> motion opponency</label>
+  <label>escape threshold
+    <input type="range" data-threshold min="0.3" max="2.5" step="0.01" value="1.23">
+    <span class="fvc-val" data-threshold-val>1.23</span>
+  </label>
+  <label>speed
+    <input type="range" data-speed min="1" max="8" step="0.5" value="4">
+    <span class="fvc-val" data-speed-val>4.0</span>
+  </label>
+  <button type="button" class="fvc-swap" data-swap>Show CNN</button>
+</div>
+`;
 
 interface Panel {
   view: HTMLCanvasElement;
@@ -36,193 +124,232 @@ interface Panel {
   lastHit: number | null;
 }
 
-function createPanel(key: 'fly' | 'cnn', color: number): Panel {
-  const view = el<HTMLCanvasElement>(`view-${key}`);
-  const renderer = createRenderer(view);
-  const { scene, droneMesh } = createWorld([], CORRIDOR.length, CORRIDOR.width);
-  (droneMesh.material as THREE.MeshStandardMaterial).color.set(color);
-  return {
-    view,
-    eye: el<HTMLCanvasElement>(`eye-${key}`).getContext('2d') as CanvasRenderingContext2D,
-    trace: el<HTMLCanvasElement>(`trace-${key}`).getContext('2d') as CanvasRenderingContext2D,
-    hits: el(`hits-${key}`),
-    color: `#${color.toString(16).padStart(6, '0')}`,
-    renderer,
-    chase: new THREE.PerspectiveCamera(60, 16 / 10, 0.1, 300),
-    droneCam: createDroneCamera(),
-    scene,
-    droneMesh,
-    drone: createDrone(),
-    samples: [],
-    collisions: 0,
-    lastHit: null,
+export function mountWidget(root: HTMLElement, weightsUrl = 'cnn.bin'): void {
+  root.classList.add('fvc');
+  root.innerHTML = MARKUP;
+  const q = <T extends HTMLElement>(sel: string, scope: ParentNode = root) => scope.querySelector(sel) as T;
+
+  const controls = {
+    rmo: q<HTMLInputElement>('[data-rmo]'),
+    threshold: q<HTMLInputElement>('[data-threshold]'),
+    speed: q<HTMLInputElement>('[data-speed]'),
+    seed: q<HTMLElement>('[data-seed]'),
   };
-}
+  const droneConfig = { ...DRONE_CONFIG };
 
-const panels = { fly: createPanel('fly', 0x2f5fd0), cnn: createPanel('cnn', 0x6d4ed8) };
-
-let seed = 1;
-let obstacles = generateCorridor({ seed, ...CORRIDOR });
-let flyController = createFlyController({});
-let cnnController: ReturnType<typeof createCnnController> | null = null;
-
-// Rebuilding the world is the only way to change corridors; the meshes are baked into the scene.
-function loadCorridor(): void {
-  obstacles = generateCorridor({ seed, ...CORRIDOR });
-  controls.seed.textContent = String(seed);
-  for (const panel of Object.values(panels)) {
-    const { scene, droneMesh } = createWorld(obstacles, CORRIDOR.length, CORRIDOR.width);
-    (droneMesh.material as THREE.MeshStandardMaterial).color.set(panel.color);
-    panel.scene = scene;
-    panel.droneMesh = droneMesh;
+  function createPanel(who: 'fly' | 'cnn', color: number): Panel {
+    const section = q(`.fvc-panel[data-who="${who}"]`);
+    const view = q<HTMLCanvasElement>('[data-view]', section);
+    const { scene, droneMesh } = createWorld([], CORRIDOR.length, CORRIDOR.width);
+    (droneMesh.material as THREE.MeshStandardMaterial).color.set(color);
+    return {
+      view,
+      eye: q<HTMLCanvasElement>('[data-eye]', section).getContext('2d') as CanvasRenderingContext2D,
+      trace: q<HTMLCanvasElement>('[data-trace]', section).getContext('2d') as CanvasRenderingContext2D,
+      hits: q('[data-hits]', section),
+      color: `#${color.toString(16).padStart(6, '0')}`,
+      renderer: createRenderer(view),
+      chase: new THREE.PerspectiveCamera(60, 16 / 10, 0.1, 300),
+      droneCam: createDroneCamera(),
+      scene,
+      droneMesh,
+      drone: createDrone(),
+      samples: [],
+      collisions: 0,
+      lastHit: null,
+    };
   }
-  restart();
-}
 
-function restart(): void {
-  for (const panel of Object.values(panels)) {
-    panel.drone = createDrone();
-    panel.samples = [];
-    panel.collisions = 0;
-    panel.lastHit = null;
-    panel.hits.textContent = '0';
+  const panels = { fly: createPanel('fly', FLY_COLOR), cnn: createPanel('cnn', CNN_COLOR) };
+
+  let seed = 1;
+  let obstacles = generateCorridor({ seed, ...CORRIDOR });
+  let flyController = createFlyController({});
+  let cnnController: ReturnType<typeof createCnnController> | null = null;
+
+  // Rebuilding the world is the only way to change corridors; the meshes are baked into the scene.
+  function loadCorridor(): void {
+    obstacles = generateCorridor({ seed, ...CORRIDOR });
+    controls.seed.textContent = String(seed);
+    for (const panel of Object.values(panels)) {
+      const { scene, droneMesh } = createWorld(obstacles, CORRIDOR.length, CORRIDOR.width);
+      (droneMesh.material as THREE.MeshStandardMaterial).color.set(panel.color);
+      panel.scene = scene;
+      panel.droneMesh = droneMesh;
+    }
+    restart();
   }
-  flyController = createFlyController({
-    hFovDeg: horizontalFovDeg(panels.fly.droneCam.camera),
-    vFovDeg: panels.fly.droneCam.camera.fov,
-    rmoEnabled: controls.rmo.checked,
-    escapeThreshold: Number(controls.threshold.value),
-  });
-  if (cnnController) cnnController = createCnnController(cnnController.weights);
-}
 
-function drawEye(panel: Panel, frame: Float32Array): void {
-  const image = panel.eye.createImageData(64, 48);
-  for (let i = 0; i < frame.length; i++) {
-    const v = Math.round(frame[i] * 255);
-    image.data.set([v, v, v, 255], i * 4);
+  function restart(): void {
+    for (const panel of Object.values(panels)) {
+      panel.drone = createDrone();
+      panel.samples = [];
+      panel.collisions = 0;
+      panel.lastHit = null;
+      panel.hits.textContent = '0';
+    }
+    flyController = createFlyController({
+      hFovDeg: horizontalFovDeg(panels.fly.droneCam.camera),
+      vFovDeg: panels.fly.droneCam.camera.fov,
+      rmoEnabled: controls.rmo.checked,
+      escapeThreshold: Number(controls.threshold.value),
+    });
+    if (cnnController) cnnController = createCnnController(cnnController.weights);
   }
-  panel.eye.putImageData(image, 0, 0);
-}
 
-// Traces share one drawing: fly plots GF drive against its threshold, CNN plots steering against zero.
-function drawTrace(panel: Panel, value: number, top: number, bottom: number, marker: number): void {
-  const { trace } = panel;
-  if (trace.canvas.width !== trace.canvas.clientWidth) {
-    trace.canvas.width = trace.canvas.clientWidth;
-    trace.canvas.height = trace.canvas.clientHeight;
+  function drawEye(panel: Panel, frame: Float32Array): void {
+    const image = panel.eye.createImageData(64, 48);
+    for (let i = 0; i < frame.length; i++) {
+      const v = Math.round(frame[i] * 255);
+      image.data.set([v, v, v, 255], i * 4);
+    }
+    panel.eye.putImageData(image, 0, 0);
   }
-  const { width, height } = trace.canvas;
-  panel.samples.push(value);
-  if (panel.samples.length > TRACE_SAMPLES) panel.samples.shift();
 
-  const y = (v: number) => height - ((v - bottom) / (top - bottom)) * height;
-  trace.clearRect(0, 0, width, height);
-  trace.setLineDash([3, 3]);
-  trace.strokeStyle = '#c8c8c2';
-  trace.beginPath();
-  trace.moveTo(0, y(marker));
-  trace.lineTo(width, y(marker));
-  trace.stroke();
+  // Traces share one drawing: fly plots GF drive against its threshold, CNN plots steering against zero.
+  function drawTrace(panel: Panel, value: number, top: number, bottom: number, marker: number): void {
+    const { trace } = panel;
+    if (trace.canvas.width !== trace.canvas.clientWidth) {
+      trace.canvas.width = trace.canvas.clientWidth;
+      trace.canvas.height = trace.canvas.clientHeight;
+    }
+    const { width, height } = trace.canvas;
+    panel.samples.push(value);
+    if (panel.samples.length > TRACE_SAMPLES) panel.samples.shift();
 
-  trace.setLineDash([]);
-  trace.strokeStyle = panel.color;
-  trace.lineWidth = 1.5;
-  trace.beginPath();
-  panel.samples.forEach((v, i) => {
-    const px = (i / (TRACE_SAMPLES - 1)) * width;
-    if (i === 0) trace.moveTo(px, y(v));
-    else trace.lineTo(px, y(v));
-  });
-  trace.stroke();
-}
+    const y = (v: number) => height - ((v - bottom) / (top - bottom)) * height;
+    trace.clearRect(0, 0, width, height);
+    trace.setLineDash([3, 3]);
+    trace.strokeStyle = '#c8c8c2';
+    trace.beginPath();
+    trace.moveTo(0, y(marker));
+    trace.lineTo(width, y(marker));
+    trace.stroke();
 
-function stepPanel(panel: Panel, steerFrom: (frame: Float32Array) => number): void {
-  panel.droneMesh.visible = false;
-  const frame = captureFrame(panel.renderer, panel.scene, panel.droneCam, panel.drone.x, panel.drone.z);
-  panel.droneMesh.visible = true;
-  drawEye(panel, frame);
-
-  stepDrone(panel.drone, steerFrom(frame), DT, droneConfig);
-  panel.drone.x = Math.max(-CORRIDOR.width / 2, Math.min(CORRIDOR.width / 2, panel.drone.x));
-
-  const hit = checkCollision(panel.drone.x, panel.drone.z, obstacles);
-  if (hit !== null && hit !== panel.lastHit) panel.hits.textContent = String(++panel.collisions);
-  panel.lastHit = hit;
-}
-
-function render(panel: Panel): void {
-  const { clientWidth, clientHeight } = panel.view;
-  if (panel.view.width !== clientWidth || panel.view.height !== clientHeight) {
-    panel.renderer.setSize(clientWidth, clientHeight, false);
-    panel.chase.aspect = clientWidth / clientHeight;
-    panel.chase.updateProjectionMatrix();
+    trace.setLineDash([]);
+    trace.strokeStyle = panel.color;
+    trace.lineWidth = 1.5;
+    trace.beginPath();
+    panel.samples.forEach((v, i) => {
+      const px = (i / (TRACE_SAMPLES - 1)) * width;
+      if (i === 0) trace.moveTo(px, y(v));
+      else trace.lineTo(px, y(v));
+    });
+    trace.stroke();
   }
-  panel.droneMesh.position.set(panel.drone.x, 0.6, panel.drone.z);
-  panel.chase.position.set(panel.drone.x, 2.2, panel.drone.z - 6);
-  panel.chase.lookAt(panel.drone.x, 0.6, panel.drone.z + 5);
-  panel.renderer.render(panel.scene, panel.chase);
-}
 
-function frame(): void {
-  const { fly, cnn } = panels;
+  function stepPanel(panel: Panel, steerFrom: (frame: Float32Array) => number): void {
+    panel.droneMesh.visible = false;
+    const frame = captureFrame(panel.renderer, panel.scene, panel.droneCam, panel.drone.x, panel.drone.z);
+    panel.droneMesh.visible = true;
+    drawEye(panel, frame);
 
-  let gfDrive = 0;
-  stepPanel(fly, (frame) => {
-    const step = stepFlyController(flyController, frame, DT);
-    gfDrive = step.debug.gfDrive;
-    return step.steering;
-  });
-  drawTrace(fly, gfDrive, Math.max(2.5, flyController.config.escapeThreshold * 1.5), 0, flyController.config.escapeThreshold);
+    stepDrone(panel.drone, steerFrom(frame), DT, droneConfig);
+    panel.drone.x = Math.max(-CORRIDOR.width / 2, Math.min(CORRIDOR.width / 2, panel.drone.x));
 
-  stepPanel(cnn, (frame) => (cnnController ? stepCnnController(cnnController, frame, DT) : 0));
-  drawTrace(cnn, cnnController ? cnnController.steering : 0, 1, -1, 0);
+    const hit = checkCollision(panel.drone.x, panel.drone.z, obstacles);
+    if (hit !== null && hit !== panel.lastHit) panel.hits.textContent = String(++panel.collisions);
+    panel.lastHit = hit;
+  }
 
-  render(fly);
-  render(cnn);
+  function render(panel: Panel): void {
+    const { clientWidth, clientHeight } = panel.view;
+    if (panel.view.width !== clientWidth || panel.view.height !== clientHeight) {
+      panel.renderer.setSize(clientWidth, clientHeight, false);
+      panel.chase.aspect = clientWidth / clientHeight;
+      panel.chase.updateProjectionMatrix();
+    }
+    panel.droneMesh.position.set(panel.drone.x, 0.6, panel.drone.z);
+    panel.chase.position.set(panel.drone.x, 2.2, panel.drone.z - 6);
+    panel.chase.lookAt(panel.drone.x, 0.6, panel.drone.z + 5);
+    panel.renderer.render(panel.scene, panel.chase);
+  }
 
-  if (Math.min(fly.drone.z, cnn.drone.z) >= CORRIDOR.length) {
+  function frame(): void {
+    const { fly, cnn } = panels;
+
+    let gfDrive = 0;
+    stepPanel(fly, (f) => {
+      const step = stepFlyController(flyController, f, DT);
+      gfDrive = step.debug.gfDrive;
+      return step.steering;
+    });
+    drawTrace(fly, gfDrive, Math.max(2.5, flyController.config.escapeThreshold * 1.5), 0, flyController.config.escapeThreshold);
+
+    stepPanel(cnn, (f) => (cnnController ? stepCnnController(cnnController, f, DT) : 0));
+    drawTrace(cnn, cnnController ? cnnController.steering : 0, 1, -1, 0);
+
+    render(fly);
+    render(cnn);
+
+    if (Math.min(fly.drone.z, cnn.drone.z) >= CORRIDOR.length) {
+      seed++;
+      loadCorridor();
+    }
+  }
+
+  // On a long page this widget is usually off screen, and two WebGL contexts are not free: only run while visible.
+  let onScreen = false;
+  let running = false;
+  function tick(): void {
+    if (!onScreen || document.hidden) {
+      running = false;
+      return;
+    }
+    frame();
+    requestAnimationFrame(tick);
+  }
+  function resume(): void {
+    if (running || !onScreen || document.hidden) return;
+    running = true;
+    requestAnimationFrame(tick);
+  }
+  new IntersectionObserver((entries) => {
+    onScreen = entries[0].isIntersecting;
+    resume();
+  }).observe(root);
+  document.addEventListener('visibilitychange', resume);
+
+  q('[data-restart]').onclick = restart;
+  q('[data-next-seed]').onclick = () => {
     seed++;
     loadCorridor();
-  }
-}
+  };
+  controls.rmo.onchange = restart;
+  controls.threshold.oninput = () => {
+    q('[data-threshold-val]').textContent = Number(controls.threshold.value).toFixed(2);
+    flyController.config.escapeThreshold = Number(controls.threshold.value);
+  };
+  controls.speed.oninput = () => {
+    q('[data-speed-val]').textContent = Number(controls.speed.value).toFixed(1);
+    droneConfig.speed = Number(controls.speed.value);
+  };
+  const swap = q('[data-swap]');
+  swap.onclick = () => {
+    const flyPanel = q('.fvc-panel[data-who="fly"]');
+    const cnnPanel = q('.fvc-panel[data-who="cnn"]');
+    const showingFly = !flyPanel.classList.contains('is-hidden');
+    flyPanel.classList.toggle('is-hidden', showingFly);
+    cnnPanel.classList.toggle('is-hidden', !showingFly);
+    swap.textContent = showingFly ? 'Show fly circuit' : 'Show CNN';
+  };
+  // The CSS drops to one column on narrow screens, so start on the fly panel and let the button swap them.
+  if (window.matchMedia('(max-width: 720px)').matches) q('.fvc-panel[data-who="cnn"]').classList.add('is-hidden');
 
-function tick(): void {
-  frame();
-  requestAnimationFrame(tick);
-}
+  fetch(weightsUrl)
+    .then((r) => r.arrayBuffer())
+    .then((b) => {
+      cnnController = createCnnController(loadCnnWeights(new Uint8Array(b)));
+    });
 
-el('restart').onclick = restart;
-el('next-seed').onclick = () => {
-  seed++;
   loadCorridor();
-};
-controls.rmo.onchange = restart;
-controls.threshold.oninput = () => {
-  el('threshold-val').textContent = Number(controls.threshold.value).toFixed(2);
-  flyController.config.escapeThreshold = Number(controls.threshold.value);
-};
-controls.speed.oninput = () => {
-  el('speed-val').textContent = Number(controls.speed.value).toFixed(1);
-  droneConfig.speed = Number(controls.speed.value);
-};
-// The CSS drops to one column on narrow screens, so start on the fly panel and let the button swap them.
-if (window.matchMedia('(max-width: 720px)').matches) el('panel-cnn').classList.add('hidden');
+  Object.assign(root, { flyvscnn: { panels, frame } }); // handle for headless checks, scoped to the element
+}
 
-el('swap').onclick = () => {
-  const showingFly = !el('panel-fly').classList.contains('hidden');
-  el('panel-fly').classList.toggle('hidden', showingFly);
-  el('panel-cnn').classList.toggle('hidden', !showingFly);
-  el('swap').textContent = showingFly ? 'Show fly circuit' : 'Show CNN';
-};
+const style = document.createElement('style');
+style.textContent = STYLE;
+document.head.append(style);
 
-Object.assign(window, { panels, frame }); // ponytail: debug handle, drop before shipping the widget
-
-fetch('cnn.bin')
-  .then((r) => r.arrayBuffer())
-  .then((b) => {
-    cnnController = createCnnController(loadCnnWeights(new Uint8Array(b)));
-  });
-
-loadCorridor();
-requestAnimationFrame(tick);
+for (const host of document.querySelectorAll<HTMLElement>('[data-fly-vs-cnn]')) {
+  mountWidget(host, host.dataset.weights || 'cnn.bin');
+}
